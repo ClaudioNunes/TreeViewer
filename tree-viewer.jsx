@@ -1,6 +1,10 @@
 // Tree Viewer - Visualizador de Estrutura de Pastas
 // Compatível com GitHub Pages (executa diretamente no browser via Babel)
 
+// Controle de versão - atualize a cada modificação
+const APP_VERSION = '1.1.0';
+const APP_BUILD_DATE = '2026-01-08';
+
 const { useState, useMemo, useCallback, useEffect, useRef } = React;
 
 // Ícones do Lucide (usando a biblioteca global)
@@ -180,7 +184,7 @@ function collectPathsToLevel(nodes, maxLevel, currentLevel = 0, paths = new Set(
   return paths;
 }
 
-// Coletar todos os paths de pastas
+// Coletar todos os paths de pastas (versão síncrona)
 function collectAllPaths(nodes, paths = new Set()) {
   for (const node of nodes) {
     if (node.isFolder && node.children?.length > 0) {
@@ -189,6 +193,104 @@ function collectAllPaths(nodes, paths = new Set()) {
     }
   }
   return paths;
+}
+
+// Versão assíncrona que processa em chunks para manter UI responsiva
+function collectAllPathsAsync(nodes, onProgress) {
+  return new Promise((resolve) => {
+    const paths = new Set();
+    const stack = [...nodes];
+    const CHUNK_SIZE = 500; // Processar 500 nós por vez
+    let processed = 0;
+    const total = countTotalNodes(nodes);
+    
+    function processChunk() {
+      const chunkEnd = Math.min(stack.length, CHUNK_SIZE);
+      let i = 0;
+      
+      while (i < chunkEnd && stack.length > 0) {
+        const node = stack.pop();
+        if (node.isFolder && node.children?.length > 0) {
+          paths.add(node.path);
+          // Adicionar filhos à pilha para processamento
+          for (let j = node.children.length - 1; j >= 0; j--) {
+            stack.push(node.children[j]);
+          }
+        }
+        processed++;
+        i++;
+      }
+      
+      if (onProgress && total > 0) {
+        onProgress(Math.min(100, Math.round((processed / total) * 100)));
+      }
+      
+      if (stack.length > 0) {
+        // Usar setTimeout(0) para ceder controle ao browser
+        setTimeout(processChunk, 0);
+      } else {
+        resolve(paths);
+      }
+    }
+    
+    processChunk();
+  });
+}
+
+// Contar total de nós para cálculo de progresso
+function countTotalNodes(nodes) {
+  let count = 0;
+  const stack = [...nodes];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    count++;
+    if (node.children) {
+      for (const child of node.children) {
+        stack.push(child);
+      }
+    }
+  }
+  return count;
+}
+
+// Versão assíncrona para coletar paths até um nível
+function collectPathsToLevelAsync(nodes, maxLevel, onProgress) {
+  return new Promise((resolve) => {
+    const paths = new Set();
+    const stack = nodes.map(n => ({ node: n, level: 0 }));
+    const CHUNK_SIZE = 500;
+    let processed = 0;
+    
+    function processChunk() {
+      let i = 0;
+      
+      while (i < CHUNK_SIZE && stack.length > 0) {
+        const { node, level } = stack.pop();
+        
+        if (level < maxLevel && node.isFolder && node.children?.length > 0) {
+          paths.add(node.path);
+          // Adicionar filhos à pilha
+          for (let j = node.children.length - 1; j >= 0; j--) {
+            stack.push({ node: node.children[j], level: level + 1 });
+          }
+        }
+        processed++;
+        i++;
+      }
+      
+      if (onProgress) {
+        onProgress(processed);
+      }
+      
+      if (stack.length > 0) {
+        setTimeout(processChunk, 0);
+      } else {
+        resolve(paths);
+      }
+    }
+    
+    processChunk();
+  });
 }
 
 // Filtrar árvore por termo de busca
@@ -452,20 +554,22 @@ function TreeViewer() {
   useEffect(() => {
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     
-    // Mostra indicador de busca imediatamente se houver termo
-    if (searchTerm) {
+    // Mostra indicador de busca imediatamente se houver termo diferente
+    if (searchTerm !== debouncedSearchTerm) {
       setIsSearching(true);
     }
     
     searchTimeoutRef.current = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
-      // Pequeno delay para dar tempo de processar antes de remover o indicador
+      // Aguardar o React processar a filtragem e renderizar
       requestAnimationFrame(() => {
-        setTimeout(() => setIsSearching(false), 50);
+        requestAnimationFrame(() => {
+          setIsSearching(false);
+        });
       });
     }, 300);
     return () => clearTimeout(searchTimeoutRef.current);
-  }, [searchTerm]);
+  }, [searchTerm, debouncedSearchTerm]);
   
   // Dados de exemplo genéricos
   const sampleData = `Folder PATH listing for volume DADOS
@@ -550,60 +654,91 @@ C:.
     setAllExpanded(false);
   }, []);
   
-  const expandAll = useCallback(() => {
+  const expandAll = useCallback(async () => {
     setIsProcessing(true);
     setProcessingMessage('Expandindo todas as pastas...');
     
-    // Usar setTimeout para permitir que a UI atualize antes do processamento pesado
-    setTimeout(() => {
-      const paths = collectAllPaths(filteredTree);
-      setExpandedPaths(paths);
-      setAllExpanded(true);
-      
-      // Usar requestAnimationFrame para garantir que a UI renderize
+    // Usar duplo requestAnimationFrame para garantir que o browser pinte a UI
+    await new Promise(resolve => {
       requestAnimationFrame(() => {
-        setTimeout(() => {
-          setIsProcessing(false);
-          setProcessingMessage('');
-        }, 100);
+        requestAnimationFrame(resolve);
       });
-    }, 50);
+    });
+    
+    // Processar de forma assíncrona em chunks
+    const paths = await collectAllPathsAsync(filteredTree, (progress) => {
+      setProcessingMessage(`Expandindo todas as pastas... ${progress}%`);
+    });
+    
+    setExpandedPaths(paths);
+    setAllExpanded(true);
+    
+    // Aguardar a renderização da árvore antes de remover o overlay
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
+    
+    setIsProcessing(false);
+    setProcessingMessage('');
   }, [filteredTree]);
   
-  const collapseAll = useCallback(() => {
+  const collapseAll = useCallback(async () => {
     setIsProcessing(true);
     setProcessingMessage('Colapsando todas as pastas...');
     
-    setTimeout(() => {
-      setAllExpanded(false);
-      setExpandedPaths(new Set());
-      
+    // Duplo rAF para garantir que o overlay seja pintado
+    await new Promise(resolve => {
       requestAnimationFrame(() => {
-        setTimeout(() => {
-          setIsProcessing(false);
-          setProcessingMessage('');
-        }, 100);
+        requestAnimationFrame(resolve);
       });
-    }, 50);
+    });
+    
+    setAllExpanded(false);
+    setExpandedPaths(new Set());
+    
+    // Aguardar a renderização antes de remover o overlay
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
+    
+    setIsProcessing(false);
+    setProcessingMessage('');
   }, []);
   
-  const handleExpandToLevel = useCallback((level) => {
+  const handleExpandToLevel = useCallback(async (level) => {
     setIsProcessing(true);
     setProcessingMessage(`Expandindo até o nível ${level}...`);
     
-    setTimeout(() => {
-      setExpandToLevel(level);
-      setAllExpanded(false);
-      const paths = collectPathsToLevel(parsedTree, level);
-      setExpandedPaths(paths);
-      
+    // Duplo rAF para garantir que o overlay seja pintado
+    await new Promise(resolve => {
       requestAnimationFrame(() => {
-        setTimeout(() => {
-          setIsProcessing(false);
-          setProcessingMessage('');
-        }, 100);
+        requestAnimationFrame(resolve);
       });
-    }, 50);
+    });
+    
+    setExpandToLevel(level);
+    setAllExpanded(false);
+    
+    // Processar de forma assíncrona em chunks
+    const paths = await collectPathsToLevelAsync(parsedTree, level, (processed) => {
+      setProcessingMessage(`Expandindo até o nível ${level}... ${processed} pastas`);
+    });
+    
+    setExpandedPaths(paths);
+    
+    // Aguardar a renderização antes de remover o overlay
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
+    
+    setIsProcessing(false);
+    setProcessingMessage('');
   }, [parsedTree]);
   
   const handleFileUpload = (e) => {
@@ -926,6 +1061,9 @@ C:.
               <span key={i} className={`inline-block w-3 h-3 rounded-full ml-1 ${c.bar}`} title={`Nível ${i}`} />
             ))}
             <span className="ml-1">...</span>
+          </p>
+          <p className={`mt-2 font-mono ${darkMode ? 'text-amber-500/60' : 'text-amber-600/60'}`}>
+            v{APP_VERSION} • {APP_BUILD_DATE}
           </p>
         </div>
       </div>
