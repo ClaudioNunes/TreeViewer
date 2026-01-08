@@ -433,6 +433,9 @@ function TreeViewer() {
   const [expandedPaths, setExpandedPaths] = useState(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false); // Estado para operações de expansão/colapsação
+  const [processingMessage, setProcessingMessage] = useState(''); // Mensagem do que está sendo processado
+  const [isSearching, setIsSearching] = useState(false); // Estado para busca em andamento
   const [darkMode, setDarkMode] = useState(true);
   const [expandToLevel, setExpandToLevel] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
@@ -445,11 +448,21 @@ function TreeViewer() {
   const MAX_VISIBLE_NODES = 1000;
   const LARGE_TREE_THRESHOLD = 5000;
   
-  // Debounce da busca
+  // Debounce da busca com indicador visual
   useEffect(() => {
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    
+    // Mostra indicador de busca imediatamente se houver termo
+    if (searchTerm) {
+      setIsSearching(true);
+    }
+    
     searchTimeoutRef.current = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
+      // Pequeno delay para dar tempo de processar antes de remover o indicador
+      requestAnimationFrame(() => {
+        setTimeout(() => setIsSearching(false), 50);
+      });
     }, 300);
     return () => clearTimeout(searchTimeoutRef.current);
   }, [searchTerm]);
@@ -537,21 +550,61 @@ C:.
     setAllExpanded(false);
   }, []);
   
-  const expandAll = () => {
-    setAllExpanded(true);
-    setExpandedPaths(collectAllPaths(filteredTree));
-  };
+  const expandAll = useCallback(() => {
+    setIsProcessing(true);
+    setProcessingMessage('Expandindo todas as pastas...');
+    
+    // Usar setTimeout para permitir que a UI atualize antes do processamento pesado
+    setTimeout(() => {
+      const paths = collectAllPaths(filteredTree);
+      setExpandedPaths(paths);
+      setAllExpanded(true);
+      
+      // Usar requestAnimationFrame para garantir que a UI renderize
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          setIsProcessing(false);
+          setProcessingMessage('');
+        }, 100);
+      });
+    }, 50);
+  }, [filteredTree]);
   
-  const collapseAll = () => {
-    setAllExpanded(false);
-    setExpandedPaths(new Set());
-  };
+  const collapseAll = useCallback(() => {
+    setIsProcessing(true);
+    setProcessingMessage('Colapsando todas as pastas...');
+    
+    setTimeout(() => {
+      setAllExpanded(false);
+      setExpandedPaths(new Set());
+      
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          setIsProcessing(false);
+          setProcessingMessage('');
+        }, 100);
+      });
+    }, 50);
+  }, []);
   
-  const handleExpandToLevel = (level) => {
-    setExpandToLevel(level);
-    setAllExpanded(false);
-    setExpandedPaths(collectPathsToLevel(parsedTree, level));
-  };
+  const handleExpandToLevel = useCallback((level) => {
+    setIsProcessing(true);
+    setProcessingMessage(`Expandindo até o nível ${level}...`);
+    
+    setTimeout(() => {
+      setExpandToLevel(level);
+      setAllExpanded(false);
+      const paths = collectPathsToLevel(parsedTree, level);
+      setExpandedPaths(paths);
+      
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          setIsProcessing(false);
+          setProcessingMessage('');
+        }, 100);
+      });
+    }, 50);
+  }, [parsedTree]);
   
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
@@ -663,6 +716,24 @@ C:.
         </div>
       )}
       
+      {/* Processing overlay - feedback visual durante operações pesadas */}
+      {isProcessing && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+          <div className={`text-center p-6 rounded-2xl ring-1 ${darkMode ? 'bg-slate-800 ring-slate-700' : 'bg-white ring-slate-200'}`}>
+            <div className="relative w-12 h-12 mx-auto mb-4">
+              <div className="absolute inset-0 rounded-full border-4 border-amber-500/20"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-amber-500 animate-spin"></div>
+            </div>
+            <p className={`text-sm font-medium ${darkMode ? 'text-slate-200' : 'text-slate-700'}`}>
+              {processingMessage || 'Processando...'}
+            </p>
+            <p className={`text-xs mt-1 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+              Aguarde um momento
+            </p>
+          </div>
+        </div>
+      )}
+      
       <div className="max-w-6xl mx-auto relative">
         {/* Header */}
         <header className="mb-6">
@@ -720,7 +791,14 @@ C:.
             
             {/* Busca */}
             <div className="flex-1 relative">
-              <Search size={16} className={`absolute left-3 top-1/2 -translate-y-1/2 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`} />
+              {isSearching ? (
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4">
+                  <div className="absolute inset-0 rounded-full border-2 border-amber-500/30"></div>
+                  <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-amber-500 animate-spin"></div>
+                </div>
+              ) : (
+                <Search size={16} className={`absolute left-3 top-1/2 -translate-y-1/2 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`} />
+              )}
               <input
                 type="text"
                 placeholder="Buscar pastas e arquivos..."
@@ -730,13 +808,18 @@ C:.
                   ? 'bg-slate-900/50 text-slate-200 placeholder-slate-500 ring-slate-700 focus:ring-amber-500/50' 
                   : 'bg-slate-50 text-slate-800 placeholder-slate-400 ring-slate-200 focus:ring-amber-400'}`}
               />
-              {searchTerm && (
+              {searchTerm && !isSearching && (
                 <button 
                   onClick={() => setSearchTerm('')}
                   className={`absolute right-3 top-1/2 -translate-y-1/2 ${darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'}`}
                 >
                   <X size={14} />
                 </button>
+              )}
+              {searchTerm && isSearching && (
+                <span className={`absolute right-3 top-1/2 -translate-y-1/2 text-xs ${darkMode ? 'text-amber-400' : 'text-amber-600'}`}>
+                  Buscando...
+                </span>
               )}
             </div>
             
@@ -746,7 +829,8 @@ C:.
               <select
                 value={expandToLevel}
                 onChange={(e) => handleExpandToLevel(parseInt(e.target.value))}
-                className={`rounded-lg px-3 py-2 text-sm ring-1 focus:outline-none ${darkMode 
+                disabled={isProcessing}
+                className={`rounded-lg px-3 py-2 text-sm ring-1 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed ${darkMode 
                   ? 'bg-slate-900/50 text-slate-300 ring-slate-700' 
                   : 'bg-slate-50 text-slate-700 ring-slate-200'}`}
               >
@@ -760,7 +844,8 @@ C:.
             <div className="flex gap-2">
               <button
                 onClick={expandAll}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors ${darkMode 
+                disabled={isProcessing}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${darkMode 
                   ? 'bg-slate-700/50 hover:bg-slate-700 text-slate-300' 
                   : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
               >
@@ -769,7 +854,8 @@ C:.
               </button>
               <button
                 onClick={collapseAll}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors ${darkMode 
+                disabled={isProcessing}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${darkMode 
                   ? 'bg-slate-700/50 hover:bg-slate-700 text-slate-300' 
                   : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
               >

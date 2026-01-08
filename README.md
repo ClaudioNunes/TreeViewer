@@ -10,7 +10,7 @@ Acesse: [https://claudionunes.github.io/TreeViewer/](https://claudionunes.github
 
 ### 1. Gerar arquivo de estrutura
 Execute no Windows CMD ou PowerShell:
-
+ø
 ```cmd
 tree /A > estrutura.txt
 ```
