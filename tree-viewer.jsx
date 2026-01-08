@@ -346,26 +346,17 @@ const TreeNode = React.memo(function TreeNode({ node, depth = 0, searchTerm, exp
         )}
       </div>
       
-      {/* Filhos */}
+      {/* Filhos com renderização otimizada */}
       {hasChildren && isExpanded && (
-        <div className="relative">
-          <div 
-            className={`absolute left-0 top-0 bottom-0 w-px ${darkMode ? 'bg-slate-700/50' : 'bg-slate-200'}`}
-            style={{ marginLeft: `${depth * 20 + 20}px` }}
-          />
-          {node.children.map((child, idx) => (
-            <TreeNode 
-              key={`${child.path}-${idx}`}
-              node={child} 
-              depth={depth + 1}
-              searchTerm={searchTerm}
-              expandedPaths={expandedPaths}
-              toggleExpand={toggleExpand}
-              allExpanded={allExpanded}
-              darkMode={darkMode}
-            />
-          ))}
-        </div>
+        <ChildrenRenderer
+          children={node.children}
+          depth={depth}
+          searchTerm={searchTerm}
+          expandedPaths={expandedPaths}
+          toggleExpand={toggleExpand}
+          allExpanded={allExpanded}
+          darkMode={darkMode}
+        />
       )}
     </div>
   );
@@ -381,10 +372,64 @@ const TreeNode = React.memo(function TreeNode({ node, depth = 0, searchTerm, exp
   );
 });
 
+// Componente para renderização otimizada dos filhos com limite
+const ChildrenRenderer = React.memo(function ChildrenRenderer({ 
+  children, depth, searchTerm, expandedPaths, toggleExpand, allExpanded, darkMode 
+}) {
+  const BATCH_SIZE = 100;
+  const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
+  
+  const visibleChildren = children.slice(0, visibleCount);
+  const hasMore = visibleCount < children.length;
+  
+  const loadMore = useCallback(() => {
+    setVisibleCount(prev => Math.min(prev + BATCH_SIZE, children.length));
+  }, [children.length]);
+  
+  useEffect(() => {
+    setVisibleCount(BATCH_SIZE);
+  }, [children]);
+  
+  return (
+    <div className="relative">
+      <div 
+        className={`absolute left-0 top-0 bottom-0 w-px ${darkMode ? 'bg-slate-700/50' : 'bg-slate-200'}`}
+        style={{ marginLeft: `${depth * 20 + 20}px` }}
+      />
+      {visibleChildren.map((child, idx) => (
+        <TreeNode 
+          key={`${child.path}-${idx}`}
+          node={child} 
+          depth={depth + 1}
+          searchTerm={searchTerm}
+          expandedPaths={expandedPaths}
+          toggleExpand={toggleExpand}
+          allExpanded={allExpanded}
+          darkMode={darkMode}
+        />
+      ))}
+      {hasMore && (
+        <button 
+          onClick={loadMore}
+          className={`ml-8 my-1 px-3 py-1 text-xs rounded-lg transition-colors ${
+            darkMode 
+              ? 'bg-slate-700/50 hover:bg-slate-700 text-amber-400' 
+              : 'bg-slate-100 hover:bg-slate-200 text-amber-600'
+          }`}
+          style={{ marginLeft: `${(depth + 1) * 20 + 8}px` }}
+        >
+          Carregar mais {Math.min(BATCH_SIZE, children.length - visibleCount)} de {children.length - visibleCount} restantes...
+        </button>
+      )}
+    </div>
+  );
+});
+
 // Componente principal
 function TreeViewer() {
   const [rawData, setRawData] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [expandedPaths, setExpandedPaths] = useState(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -392,47 +437,62 @@ function TreeViewer() {
   const [expandToLevel, setExpandToLevel] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   const [showStats, setShowStats] = useState(true);
+  const [rootVisibleCount, setRootVisibleCount] = useState(100);
   const dropZoneRef = useRef(null);
+  const searchTimeoutRef = useRef(null);
   
-  // Dados de exemplo para demonstração
-  const sampleData = `Folder PATH listing for volume DATA
-Volume serial number is 561F-08A7
-E:.
-+---Arquivos para organizar
-|   +---A R Soluções em Manutenção Industrial - GCPJ 2300314410
-|   |   \\---ARISP
-|   +---ACCERT CENTRO INTEGRADO DE SAUDE LTDA - GCPJ 2300109342
-|   +---Ageu Silva Gama - GCPJ 2200832742
-|   \\---DOC.INICIAL
-+---BACKUP PONTO
+  // Limites para árvores grandes
+  const MAX_VISIBLE_NODES = 1000;
+  const LARGE_TREE_THRESHOLD = 5000;
+  
+  // Debounce da busca
+  useEffect(() => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300);
+    return () => clearTimeout(searchTimeoutRef.current);
+  }, [searchTerm]);
+  
+  // Dados de exemplo genéricos
+  const sampleData = `Folder PATH listing for volume DADOS
+Volume serial number is 1234-ABCD
+C:.
++---Projetos
+|   +---Frontend
+|   |   +---React
+|   |   |   +---componentes
+|   |   |   \\---hooks
+|   |   +---Vue
+|   |   \\---Angular
+|   +---Backend
+|   |   +---Node
+|   |   +---Python
+|   |   |   +---Django
+|   |   |   \\---Flask
+|   |   \\---Java
+|   \\---Mobile
+|       +---iOS
+|       \\---Android
 +---Documentos
-|   \\---Meus documentos
-|       \\---PROCESSOS
-|           +---AT TRANSPORTES E SERVIÇOS LTDA
-|           |   \\---Banco Itaúbank SA - 1402_2008
-|           +---BANCO BESA
-|           |   +---Relatórios
-|           |   \\---Auditoria
-|           |       +---2012
-|           |       +---2013
-|           |       +---2014
-|           |       \\---2015
-|           +---BANIF
-|           |   +---AUDITORIA
-|           |   |   +---2012
-|           |   |   +---2013
-|           |   |   +---2014
-|           |   |   +---2015
-|           |   |   \\---2016
-|           |   |       +---AGOSTO
-|           |   |       \\---JANEIRO
-|           |   \\---BIC
-|           |       +---CIRCULARIZAÇÃO
-|           |       \\---AÇÕES ATIVAS
-|           +---BANCO GMAC S.A
-|           \\---Outros Processos
-+---Downloads
-\\---RJ`;
+|   +---Relatorios
+|   |   +---2023
+|   |   |   +---Janeiro
+|   |   |   +---Fevereiro
+|   |   |   \\---Marco
+|   |   \\---2024
+|   |       +---Janeiro
+|   |       \\---Fevereiro
+|   +---Apresentacoes
+|   \\---Planilhas
++---Recursos
+|   +---Imagens
+|   |   +---Icones
+|   |   \\---Fotos
+|   +---Videos
+|   \\---Audio
++---Configuracoes
+\\---Downloads`;
 
   const parsedTree = useMemo(() => {
     if (!rawData) return parseTreeOutput(sampleData);
@@ -440,8 +500,8 @@ E:.
   }, [rawData]);
   
   const filteredTree = useMemo(() => {
-    return filterTree(parsedTree, searchTerm);
-  }, [parsedTree, searchTerm]);
+    return filterTree(parsedTree, debouncedSearchTerm);
+  }, [parsedTree, debouncedSearchTerm]);
   
   const levelStats = useMemo(() => {
     return calculateLevelStats(parsedTree);

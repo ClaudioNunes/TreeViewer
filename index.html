@@ -459,24 +459,15 @@ const TreeNode = React.memo(function TreeNode({ node, depth = 0, searchTerm, exp
       </div>
       
       {hasChildren && isExpanded && (
-        <div className="relative">
-          <div 
-            className={`absolute left-0 top-0 bottom-0 w-px ${darkMode ? 'bg-slate-700/50' : 'bg-slate-200'}`}
-            style={{ marginLeft: `${depth * 20 + 20}px` }}
-          />
-          {node.children.map((child, idx) => (
-            <TreeNode 
-              key={`${child.path}-${idx}`}
-              node={child} 
-              depth={depth + 1}
-              searchTerm={searchTerm}
-              expandedPaths={expandedPaths}
-              toggleExpand={toggleExpand}
-              allExpanded={allExpanded}
-              darkMode={darkMode}
-            />
-          ))}
-        </div>
+        <ChildrenRenderer
+          children={node.children}
+          depth={depth}
+          searchTerm={searchTerm}
+          expandedPaths={expandedPaths}
+          toggleExpand={toggleExpand}
+          allExpanded={allExpanded}
+          darkMode={darkMode}
+        />
       )}
     </div>
   );
@@ -492,65 +483,132 @@ const TreeNode = React.memo(function TreeNode({ node, depth = 0, searchTerm, exp
   );
 });
 
+// Componente para renderização otimizada dos filhos com limite
+const ChildrenRenderer = React.memo(function ChildrenRenderer({ 
+  children, depth, searchTerm, expandedPaths, toggleExpand, allExpanded, darkMode 
+}) {
+  const BATCH_SIZE = 100; // Renderizar em lotes
+  const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
+  
+  const visibleChildren = children.slice(0, visibleCount);
+  const hasMore = visibleCount < children.length;
+  
+  const loadMore = useCallback(() => {
+    setVisibleCount(prev => Math.min(prev + BATCH_SIZE, children.length));
+  }, [children.length]);
+  
+  // Reset quando children muda
+  useEffect(() => {
+    setVisibleCount(BATCH_SIZE);
+  }, [children]);
+  
+  return (
+    <div className="relative">
+      <div 
+        className={`absolute left-0 top-0 bottom-0 w-px ${darkMode ? 'bg-slate-700/50' : 'bg-slate-200'}`}
+        style={{ marginLeft: `${depth * 20 + 20}px` }}
+      />
+      {visibleChildren.map((child, idx) => (
+        <TreeNode 
+          key={`${child.path}-${idx}`}
+          node={child} 
+          depth={depth + 1}
+          searchTerm={searchTerm}
+          expandedPaths={expandedPaths}
+          toggleExpand={toggleExpand}
+          allExpanded={allExpanded}
+          darkMode={darkMode}
+        />
+      ))}
+      {hasMore && (
+        <button 
+          onClick={loadMore}
+          className={`ml-8 my-1 px-3 py-1 text-xs rounded-lg transition-colors ${
+            darkMode 
+              ? 'bg-slate-700/50 hover:bg-slate-700 text-amber-400' 
+              : 'bg-slate-100 hover:bg-slate-200 text-amber-600'
+          }`}
+          style={{ marginLeft: `${(depth + 1) * 20 + 8}px` }}
+        >
+          Carregar mais {Math.min(BATCH_SIZE, children.length - visibleCount)} de {children.length - visibleCount} restantes...
+        </button>
+      )}
+    </div>
+  );
+});
+
 // Componente principal
 function TreeViewer() {
   const [rawData, setRawData] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [expandedPaths, setExpandedPaths] = useState(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [parseProgress, setParseProgress] = useState(0);
   const [darkMode, setDarkMode] = useState(true);
   const [expandToLevel, setExpandToLevel] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   const [showStats, setShowStats] = useState(true);
+  const [rootVisibleCount, setRootVisibleCount] = useState(100);
+  const searchTimeoutRef = useRef(null);
   
-  const sampleData = `Folder PATH listing for volume DATA
-Volume serial number is 561F-08A7
-E:.
-+---Arquivos para organizar
-|   +---A R Soluções em Manutenção Industrial
-|   |   \\---ARISP
-|   +---ACCERT CENTRO INTEGRADO DE SAUDE LTDA
-|   +---Ageu Silva Gama
-|   \\---DOC.INICIAL
-+---BACKUP PONTO
+  // Debounce da busca para evitar travamento
+  useEffect(() => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300);
+    return () => clearTimeout(searchTimeoutRef.current);
+  }, [searchTerm]);
+  
+  // Limite máximo de nós visíveis para evitar travamento
+  const MAX_VISIBLE_NODES = 1000;
+  const LARGE_TREE_THRESHOLD = 5000;
+  
+  const sampleData = `Folder PATH listing for volume DADOS
+Volume serial number is 1234-ABCD
+C:.
++---Projetos
+|   +---Frontend
+|   |   +---React
+|   |   |   +---componentes
+|   |   |   \\---hooks
+|   |   +---Vue
+|   |   \\---Angular
+|   +---Backend
+|   |   +---Node
+|   |   +---Python
+|   |   |   +---Django
+|   |   |   \\---Flask
+|   |   \\---Java
+|   \\---Mobile
+|       +---iOS
+|       \\---Android
 +---Documentos
-|   \\---Meus documentos
-|       \\---PROCESSOS
-|           +---AT TRANSPORTES E SERVIÇOS LTDA
-|           |   \\---Banco Itaúbank SA - 1402_2008
-|           +---BANCO BESA
-|           |   +---Relatórios
-|           |   \\---Auditoria
-|           |       +---2012
-|           |       +---2013
-|           |       +---2014
-|           |       \\---2015
-|           +---BANIF
-|           |   +---AUDITORIA
-|           |   |   +---2012
-|           |   |   +---2013
-|           |   |   +---2014
-|           |   |   +---2015
-|           |   |   \\---2016
-|           |   |       +---AGOSTO
-|           |   |       \\---JANEIRO
-|           |   \\---BIC
-|           |       +---CIRCULARIZAÇÃO
-|           |       \\---AÇÕES ATIVAS
-|           +---BANCO GMAC S.A
-|           \\---Outros Processos
-+---Downloads
-\\---RJ`;
+|   +---Relatorios
+|   |   +---2023
+|   |   |   +---Janeiro
+|   |   |   +---Fevereiro
+|   |   |   \\---Marco
+|   |   \\---2024
+|   |       +---Janeiro
+|   |       \\---Fevereiro
+|   +---Apresentacoes
+|   \\---Planilhas
++---Recursos
+|   +---Imagens
+|   |   +---Icones
+|   |   \\---Fotos
+|   +---Videos
+|   \\---Audio
++---Configuracoes
+\\---Downloads`;
 
   const parsedTree = useMemo(() => {
     if (!rawData) return parseTreeOutput(sampleData);
     return parseTreeOutput(rawData);
   }, [rawData]);
-  
-  const filteredTree = useMemo(() => filterTree(parsedTree, searchTerm), [parsedTree, searchTerm]);
-  const levelStats = useMemo(() => calculateLevelStats(parsedTree), [parsedTree]);
-  const maxDepth = useMemo(() => getMaxDepth(parsedTree), [parsedTree]);
   
   const totalCounts = useMemo(() => {
     let folders = 0, files = 0;
@@ -564,6 +622,13 @@ E:.
     return { folders, files };
   }, [parsedTree]);
   
+  // Detectar se é uma árvore grande
+  const isLargeTree = totalCounts.folders + totalCounts.files > LARGE_TREE_THRESHOLD;
+  
+  const filteredTree = useMemo(() => filterTree(parsedTree, debouncedSearchTerm), [parsedTree, debouncedSearchTerm]);
+  const levelStats = useMemo(() => calculateLevelStats(parsedTree), [parsedTree]);
+  const maxDepth = useMemo(() => getMaxDepth(parsedTree), [parsedTree]);
+  
   const toggleExpand = useCallback((path) => {
     setExpandedPaths(prev => {
       const next = new Set(prev);
@@ -574,7 +639,12 @@ E:.
     setAllExpanded(false);
   }, []);
   
+  // Bloquear expandir tudo para árvores grandes
   const expandAll = () => {
+    if (isLargeTree) {
+      alert(`Árvore muito grande (${totalCounts.folders.toLocaleString()} pastas). Use "Expandir por Nível" para evitar travamento.`);
+      return;
+    }
     setAllExpanded(true);
     setExpandedPaths(collectAllPaths(filteredTree));
   };
@@ -651,6 +721,11 @@ E:.
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Reset contagem visível quando filteredTree muda
+  useEffect(() => {
+    setRootVisibleCount(100);
+  }, [filteredTree]);
 
   useEffect(() => {
     if (parsedTree.length > 0 && expandedPaths.size === 0 && !allExpanded) {
@@ -776,15 +851,17 @@ E:.
             <span>📁 {totalCounts.folders.toLocaleString()} pastas</span>
             <span>📄 {totalCounts.files.toLocaleString()} arquivos</span>
             <span>📊 {Object.keys(levelStats).length} níveis</span>
-            {searchTerm && <span className="text-amber-500">🔍 {filteredTree.length} resultados</span>}
+            {debouncedSearchTerm && <span className="text-amber-500">🔍 {filteredTree.length} resultados</span>}
             {rawData && <span className="text-emerald-500">✓ Arquivo carregado</span>}
+            {isLargeTree && <span className="text-orange-400">⚠️ Árvore grande - renderização otimizada</span>}
           </div>
         </div>
         
         <div className={`backdrop-blur rounded-xl ring-1 overflow-hidden ${darkMode ? 'bg-slate-800/30 ring-slate-700/50' : 'bg-white ring-slate-200'}`}>
           {isLoading ? (
-            <div className="flex items-center justify-center py-16">
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
               <div className="animate-spin rounded-full h-8 w-8 border-2 border-amber-400 border-t-transparent" />
+              <p className={`text-sm ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>Processando arquivo...</p>
             </div>
           ) : filteredTree.length === 0 ? (
             <div className={`text-center py-16 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
@@ -793,10 +870,22 @@ E:.
             </div>
           ) : (
             <div className="p-3 max-h-[70vh] overflow-auto custom-scrollbar">
-              {filteredTree.map((node, idx) => (
-                <TreeNode key={`${node.path}-${idx}`} node={node} searchTerm={searchTerm}
+              {filteredTree.slice(0, rootVisibleCount).map((node, idx) => (
+                <TreeNode key={`${node.path}-${idx}`} node={node} searchTerm={debouncedSearchTerm}
                   expandedPaths={expandedPaths} toggleExpand={toggleExpand} allExpanded={allExpanded} darkMode={darkMode} />
               ))}
+              {filteredTree.length > rootVisibleCount && (
+                <button 
+                  onClick={() => setRootVisibleCount(prev => prev + 100)}
+                  className={`w-full mt-2 py-2 text-sm rounded-lg transition-colors ${
+                    darkMode 
+                      ? 'bg-slate-700/50 hover:bg-slate-700 text-amber-400' 
+                      : 'bg-slate-100 hover:bg-slate-200 text-amber-600'
+                  }`}
+                >
+                  Carregar mais itens ({filteredTree.length - rootVisibleCount} restantes)
+                </button>
+              )}
             </div>
           )}
         </div>
