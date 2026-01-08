@@ -4,7 +4,7 @@ Visualizador interativo de estrutura de pastas geradas pelo comando `tree /A` do
 
 ## 🚀 Demo
 
-Acesse: [https://seu-usuario.github.io/AnalisePastasJCG](https://seu-usuario.github.io/AnalisePastasJCG)
+Acesse: [https://claudionunes.github.io/TreeViewer/](https://claudionunes.github.io/TreeViewer/)
 
 ## 📋 Como Usar
 
