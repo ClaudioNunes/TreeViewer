@@ -879,6 +879,9 @@ C:.
             <h1 className={`text-2xl md:text-3xl font-bold bg-gradient-to-r ${darkMode ? 'from-slate-100 to-slate-400' : 'from-slate-800 to-slate-600'} bg-clip-text text-transparent`}>
               Tree Viewer
             </h1>
+            <span className={`text-xs font-mono px-2 py-0.5 rounded-full ring-1 ${darkMode ? 'bg-amber-500/10 text-amber-400 ring-amber-500/30' : 'bg-amber-50 text-amber-600 ring-amber-200'}`}>
+              v{APP_VERSION}
+            </span>
             <div className="ml-auto flex items-center gap-2">
               {/* Toggle Stats */}
               <button
@@ -1061,9 +1064,6 @@ C:.
               <span key={i} className={`inline-block w-3 h-3 rounded-full ml-1 ${c.bar}`} title={`Nível ${i}`} />
             ))}
             <span className="ml-1">...</span>
-          </p>
-          <p className={`mt-2 font-mono ${darkMode ? 'text-amber-500/60' : 'text-amber-600/60'}`}>
-            v{APP_VERSION} • {APP_BUILD_DATE}
           </p>
         </div>
       </div>
