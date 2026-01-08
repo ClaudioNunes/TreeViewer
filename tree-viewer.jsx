@@ -2,7 +2,7 @@
 // Compatível com GitHub Pages (executa diretamente no browser via Babel)
 
 // Controle de versão - atualize a cada modificação
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.3.1';
 const APP_BUILD_DATE = '2026-01-08';
 
 const { useState, useMemo, useCallback, useEffect, useRef } = React;
@@ -453,7 +453,7 @@ const TreeNode = React.memo(function TreeNode({ node, depth = 0, searchTerm, exp
         <ChildrenRenderer
           children={node.children}
           depth={depth}
-          searchTerm={searchTerm}
+          debouncedSearchTerm={searchTerm}
           expandedPaths={expandedPaths}
           toggleExpand={toggleExpand}
           allExpanded={allExpanded}
@@ -476,7 +476,7 @@ const TreeNode = React.memo(function TreeNode({ node, depth = 0, searchTerm, exp
 
 // Componente para renderização otimizada dos filhos com limite
 const ChildrenRenderer = React.memo(function ChildrenRenderer({ 
-  children, depth, searchTerm, expandedPaths, toggleExpand, allExpanded, darkMode 
+  children, depth, debouncedSearchTerm, expandedPaths, toggleExpand, allExpanded, darkMode 
 }) {
   const BATCH_SIZE = 100;
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
@@ -503,7 +503,7 @@ const ChildrenRenderer = React.memo(function ChildrenRenderer({
           key={`${child.path}-${idx}`}
           node={child} 
           depth={depth + 1}
-          searchTerm={searchTerm}
+          searchTerm={debouncedSearchTerm}
           expandedPaths={expandedPaths}
           toggleExpand={toggleExpand}
           allExpanded={allExpanded}
@@ -544,32 +544,45 @@ function TreeViewer() {
   const [showStats, setShowStats] = useState(true);
   const [rootVisibleCount, setRootVisibleCount] = useState(100);
   const dropZoneRef = useRef(null);
-  const searchTimeoutRef = useRef(null);
+  const searchInputRef = useRef(null);
   
   // Limites para árvores grandes
   const MAX_VISIBLE_NODES = 1000;
   const LARGE_TREE_THRESHOLD = 5000;
   
-  // Debounce da busca com indicador visual
-  useEffect(() => {
-    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+  // Função para executar a busca explicitamente
+  const executeSearch = useCallback(async () => {
+    if (searchTerm === debouncedSearchTerm) return; // Já está filtrado
     
-    // Mostra indicador de busca imediatamente se houver termo diferente
-    if (searchTerm !== debouncedSearchTerm) {
-      setIsSearching(true);
-    }
+    setIsSearching(true);
+    setProcessingMessage('Filtrando resultados...');
     
-    searchTimeoutRef.current = setTimeout(() => {
-      setDebouncedSearchTerm(searchTerm);
-      // Aguardar o React processar a filtragem e renderizar
+    // Aguardar UI atualizar
+    await new Promise(resolve => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setIsSearching(false);
-        });
+        requestAnimationFrame(resolve);
       });
-    }, 300);
-    return () => clearTimeout(searchTimeoutRef.current);
+    });
+    
+    setDebouncedSearchTerm(searchTerm);
+    
+    // Aguardar renderização
+    await new Promise(resolve => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
+    
+    setIsSearching(false);
+    setProcessingMessage('');
   }, [searchTerm, debouncedSearchTerm]);
+  
+  // Limpar busca
+  const clearSearch = useCallback(() => {
+    setSearchTerm('');
+    setDebouncedSearchTerm('');
+    setIsSearching(false);
+  }, []);
   
   // Dados de exemplo genéricos
   const sampleData = `Folder PATH listing for volume DADOS
@@ -928,37 +941,58 @@ C:.
             </label>
             
             {/* Busca */}
-            <div className="flex-1 relative">
-              {isSearching ? (
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4">
-                  <div className="absolute inset-0 rounded-full border-2 border-amber-500/30"></div>
-                  <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-amber-500 animate-spin"></div>
-                </div>
-              ) : (
+            <div className="flex-1 flex gap-2">
+              <div className="flex-1 relative">
                 <Search size={16} className={`absolute left-3 top-1/2 -translate-y-1/2 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`} />
-              )}
-              <input
-                type="text"
-                placeholder="Buscar pastas e arquivos..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className={`w-full rounded-lg pl-9 pr-9 py-2 text-sm ring-1 focus:outline-none transition-all ${darkMode 
-                  ? 'bg-slate-900/50 text-slate-200 placeholder-slate-500 ring-slate-700 focus:ring-amber-500/50' 
-                  : 'bg-slate-50 text-slate-800 placeholder-slate-400 ring-slate-200 focus:ring-amber-400'}`}
-              />
-              {searchTerm && !isSearching && (
-                <button 
-                  onClick={() => setSearchTerm('')}
-                  className={`absolute right-3 top-1/2 -translate-y-1/2 ${darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'}`}
-                >
-                  <X size={14} />
-                </button>
-              )}
-              {searchTerm && isSearching && (
-                <span className={`absolute right-3 top-1/2 -translate-y-1/2 text-xs ${darkMode ? 'text-amber-400' : 'text-amber-600'}`}>
-                  Buscando...
-                </span>
-              )}
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  placeholder="Digite e pressione Enter ou clique em Filtrar..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      executeSearch();
+                    }
+                  }}
+                  disabled={isSearching}
+                  className={`w-full rounded-lg pl-9 pr-9 py-2 text-sm ring-1 focus:outline-none transition-all disabled:opacity-50 ${darkMode 
+                    ? 'bg-slate-900/50 text-slate-200 placeholder-slate-500 ring-slate-700 focus:ring-amber-500/50' 
+                    : 'bg-slate-50 text-slate-800 placeholder-slate-400 ring-slate-200 focus:ring-amber-400'}`}
+                />
+                {searchTerm && !isSearching && (
+                  <button 
+                    onClick={clearSearch}
+                    className={`absolute right-3 top-1/2 -translate-y-1/2 ${darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'}`}
+                    title="Limpar busca"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={executeSearch}
+                disabled={isSearching || searchTerm === debouncedSearchTerm}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ring-1 disabled:opacity-50 disabled:cursor-not-allowed ${darkMode 
+                  ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 ring-amber-500/30' 
+                  : 'bg-amber-50 hover:bg-amber-100 text-amber-700 ring-amber-200'}`}
+              >
+                {isSearching ? (
+                  <>
+                    <div className="w-4 h-4 relative">
+                      <div className="absolute inset-0 rounded-full border-2 border-amber-500/30"></div>
+                      <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-amber-500 animate-spin"></div>
+                    </div>
+                    <span className="hidden sm:inline">Filtrando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Search size={14} />
+                    <span className="hidden sm:inline">Filtrar</span>
+                  </>
+                )}
+              </button>
             </div>
             
             {/* Expand to level */}
@@ -1018,9 +1052,14 @@ C:.
             <span>📁 {totalCounts.folders.toLocaleString()} pastas</span>
             <span>📄 {totalCounts.files.toLocaleString()} arquivos</span>
             <span>📊 {Object.keys(levelStats).length} níveis</span>
-            {searchTerm && (
+            {debouncedSearchTerm && (
               <span className="text-amber-500">
-                🔍 {filteredTree.length} resultados
+                🔍 {filteredTree.length} resultados para "{debouncedSearchTerm}"
+              </span>
+            )}
+            {searchTerm && searchTerm !== debouncedSearchTerm && (
+              <span className={`${darkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+                ⏳ Pressione Enter ou clique em Filtrar
               </span>
             )}
             {rawData && <span className="text-emerald-500">✓ Arquivo carregado</span>}
@@ -1044,7 +1083,7 @@ C:.
                 <TreeNode
                   key={`${node.path}-${idx}`}
                   node={node}
-                  searchTerm={searchTerm}
+                  searchTerm={debouncedSearchTerm}
                   expandedPaths={expandedPaths}
                   toggleExpand={toggleExpand}
                   allExpanded={allExpanded}
